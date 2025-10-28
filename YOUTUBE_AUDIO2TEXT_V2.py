@@ -1,139 +1,84 @@
-"""
-YOUTUBE_AUDIO2TEXT_V2
-"""
-
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[3]:
+"""
+YOUTUBE_AUDIO2TEXT_V2 (refactorizado)
+
+Este script ahora actúa como un pequeño CLI y punto de entrada
+para lanzar la interfaz gráfica.
+
+Comandos:
+  - python YOUTUBE_AUDIO2TEXT_V2.py --gui
+  - python YOUTUBE_AUDIO2TEXT_V2.py --url <YouTubeURL> [--lang es-ES]
+  - python YOUTUBE_AUDIO2TEXT_V2.py --file <ruta_audio_o_video> [--lang es-ES]
+"""
+
+import argparse
+from pathlib import Path
+
+from yt_audio2text.downloader import download_youtube_audio
+from yt_audio2text.audio_utils import ensure_wav, split_wav_on_silence
+from yt_audio2text.transcriber import Transcriber
+from yt_audio2text.gui import run as run_gui
 
 
-import youtube_dl
-import speech_recognition as sr
-from pydub import AudioSegment
+def transcribe_youtube(url: str, lang: str) -> Path:
+    downloads = Path("downloads")
+    outputs = Path("outputs")
+    downloads.mkdir(exist_ok=True)
+    outputs.mkdir(exist_ok=True)
 
-def yt_audio_to_text(url):
-  """
-  Extrae el audio de un video de YouTube y lo convierte a texto.
-
-  Args:
-    url: URL del video de YouTube.
-
-  Returns:
-    Texto del audio del video.
-  """
-
-  # Descarga el video
-  with youtube_dl.YoutubeDL() as ydl:
-    ydl.download([url])
-
-  # Extrae el audio del video
-  audio_file = f"{ydl.get_filename(url)}.mp3"
-  sound = AudioSegment.from_mp3(audio_file)
-
-  # Convierte el audio a formato WAV
-  wav_file = audio_file.export("audio.wav", format="wav")
-
-  # Usa SpeechRecognition para convertir el audio a texto
-  r = sr.Recognizer()
-  with sr.AudioFile(wav_file) as source:
-    audio = r.record(source)
-
-  # Elimina archivos temporales
-  import os
-  os.remove(audio_file)
-  os.remove(wav_file)
-
-  # Regresa el texto
-  return r.recognize_google(audio)
-
-# Ejemplo de uso
-url = "https://www.youtube.com/watch?v=6pM0Rmj57Vk"
-text = yt_audio_to_text(url)
-
-print(text)
+    audio = download_youtube_audio(url, downloads, fmt="wav", sample_rate=16000)
+    wav = ensure_wav(audio, out_dir=outputs, sample_rate=16000)
+    chunks = split_wav_on_silence(wav, max_chunk_ms=60_000)
+    tr = Transcriber(language=lang)
+    if len(chunks) <= 1:
+        text = tr.transcribe_wav(wav)
+    else:
+        text = tr.transcribe_chunks(chunks)
+    out = outputs / f"transcripcion_{wav.stem}.txt"
+    out.write_text(text, encoding="utf-8")
+    return out
 
 
-# In[5]:
+def transcribe_file(path: Path, lang: str) -> Path:
+    outputs = Path("outputs")
+    outputs.mkdir(exist_ok=True)
+    wav = ensure_wav(path, out_dir=outputs, sample_rate=16000)
+    chunks = split_wav_on_silence(wav, max_chunk_ms=60_000)
+    tr = Transcriber(language=lang)
+    if len(chunks) <= 1:
+        text = tr.transcribe_wav(wav)
+    else:
+        text = tr.transcribe_chunks(chunks)
+    out = outputs / f"transcripcion_{wav.stem}.txt"
+    out.write_text(text, encoding="utf-8")
+    return out
 
 
-import speech_recognition as sr
-from moviepy.editor import AudioFileClip
-import os
+def main() -> None:
+    parser = argparse.ArgumentParser(description="YouTube/Audio -> Texto")
+    parser.add_argument("--gui", action="store_true", help="Lanza la interfaz gráfica")
+    parser.add_argument("--url", type=str, help="URL de YouTube")
+    parser.add_argument("--file", type=str, help="Ruta de archivo local (audio/video)")
+    parser.add_argument("--lang", type=str, default="es-ES", help="Idioma, ej. es-ES, en-US")
+    args = parser.parse_args()
 
-def convertir_archivo_local_a_texto(archivo_audio):
-    """
-    Convierte un archivo de audio local a texto
-    Formatos soportados: .wav, .mp3, .mp4, .m4a, etc.
-    """
-    try:
-        # Si no es WAV, convertir primero
-        if not archivo_audio.lower().endswith('.wav'):
-            print("Convirtiendo archivo a WAV...")
-            audio_clip = AudioFileClip(archivo_audio)
-            wav_filename = "temp_audio.wav"
-            audio_clip.write_audiofile(wav_filename)
-            audio_clip.close()
-            archivo_a_procesar = wav_filename
-        else:
-            archivo_a_procesar = archivo_audio
+    if args.gui or (not args.url and not args.file):
+        run_gui()
+        return
 
-        # Reconocimiento de voz
-        r = sr.Recognizer()
+    if args.url:
+        out = transcribe_youtube(args.url, args.lang)
+        print(f"Transcripción guardada en: {out}")
+        return
 
-        with sr.AudioFile(archivo_a_procesar) as source:
-            print("Ajustando para ruido ambiente...")
-            r.adjust_for_ambient_noise(source, duration=1)
-            print("Grabando audio...")
-            audio_data = r.record(source)
+    if args.file:
+        out = transcribe_file(Path(args.file), args.lang)
+        print(f"Transcripción guardada en: {out}")
+        return
 
-            print("Convirtiendo a texto...")
-            try:
-                # Cambiar idioma según necesites: 'es-ES', 'en-US', etc.
-                text = r.recognize_google(audio_data, language='es-ES')
-                print(f"Texto extraído: {text}")
-                return text
-            except sr.UnknownValueError:
-                print("No se pudo entender el audio")
-                return None
-            except sr.RequestError as e:
-                print(f"Error del servicio de Google: {e}")
-                return None
-
-    except Exception as e:
-        print(f"Error al procesar el archivo: {e}")
-        return None
-    finally:
-        # Limpiar archivo temporal si se creó
-        if 'wav_filename' in locals() and os.path.exists(wav_filename):
-            os.remove(wav_filename)
 
 if __name__ == "__main__":
-    print("=== CONVERTIDOR DE AUDIO LOCAL ===")
-    print("Coloca tu archivo de audio en la misma carpeta que este script")
-    print("Formatos soportados: .wav, .mp3, .mp4, .m4a, etc.")
-
-    # Cambia esto por el nombre de tu archivo
-    archivo = input("Nombre del archivo de audio: ")
-
-    if os.path.exists(archivo):
-        texto = convertir_archivo_local_a_texto(archivo)
-        if texto:
-            print(f"\n=== RESULTADO ===")
-            print(texto)
-
-            # Guardar resultado en archivo de texto
-            with open("transcripcion.txt", "w", encoding="utf-8") as f:
-                f.write(texto)
-            print("\nTexto guardado en 'transcripcion.txt'")
-        else:
-            print("No se pudo extraer texto")
-    else:
-        print(f"El archivo '{archivo}' no existe")
-
-
-# In[ ]:
-
-
-
+    main()
 

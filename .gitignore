@@ -48,3 +48,8 @@ Thumbs.db
 *.xls
 *.db
 *.sqlite
+ 
+# Project outputs
+outputs/
+downloads/
+chunks_*/
